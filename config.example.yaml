@@ -123,7 +123,7 @@ extraction:
   pdf_timeout: 90
 
 ollama:
-  url: http://10.202.0.10:11434
+  url: YOUR_IP:PORT
   model: qwen3.5:9b
   # 8192 is the safe value on 8 GB of VRAM.
   # With OLLAMA_FLASH_ATTENTION=1 and OLLAMA_KV_CACHE_TYPE=q8_0 on the PC,
