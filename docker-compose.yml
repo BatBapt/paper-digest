@@ -1,0 +1,17 @@
+services:
+  veille:
+    build: .
+    image: paper-digest:latest
+    container_name: paper-digest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: Europe/Paris
+      VEILLE_CONFIG: /app/config.yaml
+      VEILLE_DATA: /data
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./data:/data
+    ports:
+      - "8137:8137"
+    command: ["serve"]

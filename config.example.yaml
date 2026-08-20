@@ -1,0 +1,153 @@
+# Copy to config.yaml, then adapt.
+# Reports are generated in English; the Home Assistant voice command stays French.
+
+schedule:
+  # Day of week (0 = Monday) and local time of the weekly run
+  weekday: 0
+  hour: 7
+  minute: 0
+
+window:
+  # Search window in days
+  lookback_days: 7
+
+sources:
+  arxiv:
+    enabled: true
+    categories:
+      - cs.CV
+      - cs.AI
+      - cs.LG
+      - cs.CL
+      - cs.MM
+      - eess.IV
+      - eess.AS
+      - eess.SP
+    # Extra full text queries, not restricted to the categories above
+    extra_queries:
+      - 'all:"sign language"'
+      - 'all:"sign language recognition"'
+      - 'all:"sign language translation"'
+    max_results_per_query: 300
+  openalex:
+    enabled: true
+    queries:
+      - '"sign language recognition"'
+      - '"sign language translation"'
+      - '"audio signal processing" AND "deep learning"'
+    max_results_per_query: 50
+
+selection:
+  # Papers read in full and included in the report
+  max_papers: 15
+  # Minimum score to be eligible
+  min_score: 3
+  # Download and read the PDF, otherwise summarize from the abstract only
+  download_pdf: true
+
+scoring:
+  keywords:
+    "sign language": 10
+    "fingerspelling": 8
+    "gloss": 3
+    "deaf": 5
+    "computer vision": 4
+    "video understanding": 4
+    "action recognition": 3
+    "pose estimation": 4
+    "gesture": 4
+    "multimodal": 3
+    "speech recognition": 4
+    "speech enhancement": 4
+    "audio": 2
+    "signal processing": 4
+    "self-supervised": 3
+    "transformer": 1
+    "diffusion": 1
+    "benchmark": 1
+    "dataset": 2
+    "real-time": 2
+    "on-device": 3
+    "edge": 2
+  categories:
+    cs.CV: 3
+    eess.AS: 3
+    eess.SP: 3
+    eess.IV: 2
+    cs.CL: 2
+    cs.MM: 2
+    cs.AI: 1
+    cs.LG: 1
+
+themes:
+  # Order matters: the first theme that matches wins
+  "Sign language":
+    - "sign language"
+    - "signed language"
+    - "fingerspelling"
+    - "deaf"
+    - "asl"
+    - "lsf"
+  "Computer vision":
+    - "computer vision"
+    - "video"
+    - "image"
+    - "segmentation"
+    - "detection"
+    - "pose"
+    - "gesture"
+    - "visual"
+  "Audio and speech":
+    - "speech"
+    - "audio"
+    - "acoustic"
+    - "asr"
+    - "tts"
+    - "speaker"
+    - "music"
+  "Signal processing":
+    - "signal processing"
+    - "denoising"
+    - "filtering"
+    - "compression"
+    - "eeg"
+    - "emg"
+    - "sensor"
+  "General AI":
+    - ""
+
+extraction:
+  max_pages: 40
+  # Max characters sent to the LLM per paper, keep well under num_ctx
+  max_chars: 18000
+  pdf_timeout: 90
+
+ollama:
+  url: http://10.202.0.10:11434
+  model: qwen3.5:9b
+  # 8192 is the safe value on 8 GB of VRAM.
+  # With OLLAMA_FLASH_ATTENTION=1 and OLLAMA_KV_CACHE_TYPE=q8_0 on the PC,
+  # try 16384 or 32768 and raise max_chars accordingly.
+  num_ctx: 8192
+  temperature: 0.2
+  # Thinking mode: slower and unnecessary for structured summarization
+  think: false
+  timeout: 900
+  # Grace period if the GPU machine is off when the job triggers (minutes)
+  wait_minutes: 60
+
+mail:
+  enabled: true
+  smtp_host: smtp.gmail.com
+  smtp_port: 465
+  # Credentials come from the SMTP_USER / SMTP_PASSWORD / MAIL_TO environment variables
+  subject_prefix: "Research digest"
+  attach_markdown: true
+
+http:
+  enabled: true
+  host: 0.0.0.0
+  port: 8137
+  # Token expected in the X-Token header. Empty means no authentication.
+  # Worth setting, since the campus network is shared.
+  token: "change_me"
