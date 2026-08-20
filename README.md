@@ -130,14 +130,64 @@ docker compose up -d
 
 Your `config.yaml`, `.env` and `data/` are untouched.
 
+## Running without Docker
+
+Useful for development, or to validate the configuration before building an image.
+Requires Python 3.11 or later.
+
+```bash
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+**The `.env` file is loaded automatically**, the same one Docker reads. Real
+environment variables take precedence over it, so a single value can be overridden
+inline without editing the file:
+
+```bash
+MAIL_TO=someone.else@example.com python -m digest run --verbose
+```
+
+`.env` is resolved relative to the project root, so run these commands from there.
+
+Then the same commands the container runs:
+
+```bash
+python -m digest test-ollama
+python -m digest test-mail
+python -m digest run --no-mail --verbose
+python -m digest serve             # scheduler + HTTP endpoint, Ctrl+C to stop
+```
+
+The config file and the data directory are read from two optional environment
+variables, defaulting to `config.yaml` and `./data` in the current directory. Useful
+for keeping a throwaway setup next to the real one:
+
+```bash
+VEILLE_CONFIG=config.dev.yaml VEILLE_DATA=/tmp/digest-dev python -m digest run --no-mail
+```
+
+### Making the test loop fast
+
+A default run collects hundreds of papers and reads fifteen in full, which takes 10 to
+25 minutes. For a quick end-to-end check, copy `config.yaml` and shrink it:
+
+- `window.lookback_days: 2`
+- `selection.max_papers: 2`
+- `ollama.wait_minutes: 0` so an unreachable Ollama fails immediately instead of
+  retrying for an hour
+
+That brings a complete run down to a couple of minutes. The report still lands in
+`data/reports/`, so you can open the HTML in a browser and see exactly what the email
+would look like.
+
 ## Triggering a run manually
 
 ```bash
 curl -X POST -H "X-Token: your_token" http://HOST:8137/run
 curl -H "X-Token: your_token" http://HOST:8137/status
 ```
-
-`your_token` can be whatever you want 
 
 `/run` starts a run in the background and returns immediately. `/status` reports
 whether a run is in progress and how the last one ended.
