@@ -1,126 +1,205 @@
-# Veille scientifique automatisee
+# paper-digest
 
-Collecte hebdomadaire d'articles scientifiques (IA, vision par ordinateur, traitement du signal audio/video, langue des signes), lecture des PDF, resume detaille par LLM local, rapport HTML envoye par mail.
+A self-hosted weekly digest of new scientific papers. It queries arXiv and OpenAlex,
+downloads the PDFs, reads them with a local LLM, and emails you a detailed report.
 
-Les rapports sont rediges en anglais. Seule la commande vocale Home Assistant reste en francais.
+Out of the box it tracks AI, computer vision, audio and video signal processing, and
+sign language technology, but the topics are just keyword weights in a config file, so
+it works for any field.
 
-## Architecture
+Reports are written in English.
+
+## How it works
 
 ```
-Raspberry Pi (conteneur veille)          PC RTX 4060
-  1. Collecte arXiv + OpenAlex
-  2. Filtrage par score + dedup SQLite
-  3. Telechargement PDF + extraction  ->  4. Resume detaille (Ollama)
-  5. Rapport HTML + Markdown
-  6. Envoi SMTP Gmail
+1. Collect     arXiv API + OpenAlex, sliding window of N days
+2. Select      keyword scoring, SQLite dedup so a paper is never reported twice
+3. Read        PDF download, text extraction, smart truncation
+4. Summarize   structured summary from a local LLM (Ollama)
+5. Report      HTML + Markdown
+6. Deliver     SMTP
 ```
 
-Le Pi orchestre (il est toujours allume), le PC ne fait que l'inference. Si le PC est
-eteint au moment du declenchement, le service attend jusqu'a `ollama.wait_minutes`
-avant de basculer sur les resumes officiels.
+Everything except step 4 is lightweight and runs comfortably on a Raspberry Pi. Step 4
+is always an HTTP call to an Ollama server, which may be the same machine or another
+one on your network.
 
-## Installation
+## Requirements
+
+- **Docker** and the Compose plugin
+- **[Ollama](https://ollama.com)** with a model pulled, reachable over HTTP
+- An **SMTP account** to send the report (Gmail works, with an app password)
+
+### Setting up Ollama
+
+Install Ollama, then pull a model:
 
 ```bash
-mkdir -p /home/homeassistant/veille && cd /home/homeassistant/veille
-# copier les fichiers du projet ici
+ollama pull qwen3.5:9b
+```
+
+`qwen3.5:9b` needs roughly 6 GB of VRAM. On a smaller GPU use `qwen3.5:4b`, which is
+about 3 GB and noticeably weaker on long documents but perfectly usable. Any model
+Ollama can serve will work; set the name in `config.yaml`.
+
+**If Ollama runs on a different machine than this project**, it must listen on the
+network rather than on localhost only. Set the environment variable `OLLAMA_HOST` to
+`0.0.0.0:11434` on that machine and restart Ollama, then allow port 11434 through its
+firewall. This is the single most common setup failure.
+
+A Raspberry Pi cannot run a 9B model itself. On a Pi, point `ollama.url` at a desktop
+or server that has a GPU.
+
+## Configuration
+
+```bash
 cp config.example.yaml config.yaml
 cp .env.example .env
-nano .env          # SMTP_USER, SMTP_PASSWORD (mot de passe application Gmail), MAIL_TO
-nano config.yaml   # ollama.url = IP du PC, http.token, mots cles
-docker compose -f docker-compose-veille.yml build
-docker compose -f docker-compose-veille.yml up -d
-docker logs -f veille-scientifique
 ```
 
-## Verifications
+Neither file is tracked by Git.
+
+### What to replace, and where
+
+| Value | File | Key | Notes |
+| --- | --- | --- | --- |
+| Ollama address | `config.yaml` | `ollama.url` | `http://IP:11434`. Use the machine's LAN IP, not `localhost`, unless Ollama runs in the same container network |
+| Model name | `config.yaml` | `ollama.model` | Must match `ollama list` exactly |
+| HTTP token | `config.yaml` | `http.token` | Any random string. Protects the manual trigger endpoint |
+| Run day and time | `config.yaml` | `schedule` | `weekday: 0` is Monday |
+| Your topics | `config.yaml` | `scoring.keywords` | Weight per keyword. The main lever |
+| arXiv categories | `config.yaml` | `sources.arxiv.categories` | See the [arXiv taxonomy](https://arxiv.org/category_taxonomy) |
+| Sender address | `.env` | `SMTP_USER` | |
+| Sender password | `.env` | `SMTP_PASSWORD` | For Gmail this is an **app password**, not your account password |
+| Recipient | `.env` | `MAIL_TO` | Comma-separated for several recipients |
+| Contact email | `.env` | `OPENALEX_MAILTO` | Optional. Gets you into OpenAlex's faster polite pool |
+
+Gmail app passwords are created at
+[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) and
+require two-factor authentication on the account.
+
+Everything else in `config.example.yaml` has a working default.
+
+## Deploying with Docker
 
 ```bash
-# SMTP
-docker compose -f docker-compose-veille.yml run --rm veille test-mail
-# Ollama joignable depuis le Pi
-docker compose -f docker-compose-veille.yml run --rm veille test-ollama
-# Execution complete sans envoi de mail
-docker compose -f docker-compose-veille.yml run --rm veille run --no-mail --verbose
+docker compose build
+docker compose up -d
+docker compose logs -f
 ```
 
-Les rapports sont ecrits dans `./data/reports/`, les PDF dans `./data/pdf/`,
-l'etat dans `./data/state.sqlite`.
+The container starts a scheduler that fires on the day and time set in
+`config.yaml`, plus an HTTP endpoint on port 8137 for manual runs. It stays up between
+runs and costs nothing while idle.
 
-## Declenchement
+Data is persisted in `./data`, mounted into the container:
 
-- Automatique : `schedule.weekday` (0 = lundi) et `schedule.hour` dans `config.yaml`.
-- Manuel : `curl -X POST -H "X-Token: mon_jeton" http://IP_DU_PI:8137/run`
-- Etat : `curl -H "X-Token: mon_jeton" http://IP_DU_PI:8137/status`
+```
+data/reports/    generated HTML and Markdown reports
+data/pdf/        downloaded PDFs
+data/state.sqlite  which papers have already been reported
+```
 
-## Integration Home Assistant
+Deleting `data/state.sqlite` makes the next run treat every paper as new.
 
-`configuration.yaml` :
+### Checking the setup
+
+Run these before waiting a week for the first scheduled report:
+
+```bash
+# Is the SMTP configuration correct? Sends a test email
+docker compose run --rm digest test-mail
+
+# Is Ollama reachable from inside the container?
+docker compose run --rm digest test-ollama
+
+# Full run, writes the report to data/reports/ without emailing it
+docker compose run --rm digest run --no-mail --verbose
+```
+
+If `test-ollama` fails while Ollama works fine on its host, it is almost always the
+`OLLAMA_HOST` binding described above.
+
+### Updating
+
+```bash
+git pull
+docker compose build
+docker compose up -d
+```
+
+Your `config.yaml`, `.env` and `data/` are untouched.
+
+## Triggering a run manually
+
+```bash
+curl -X POST -H "X-Token: your_token" http://HOST:8137/run
+curl -H "X-Token: your_token" http://HOST:8137/status
+```
+
+`your_token` can be whatever you want 
+
+`/run` starts a run in the background and returns immediately. `/status` reports
+whether a run is in progress and how the last one ended.
+
+## Tuning
+
+| Key | Effect |
+| --- | --- |
+| `selection.max_papers` | Papers read in full. GPU time scales linearly |
+| `selection.min_score` | Raise it if the digest is too noisy |
+| `scoring.keywords` | Keyword weights. Title matches count double |
+| `window.lookback_days` | Search window. Keep it aligned with the schedule |
+| `extraction.max_chars` | Text sent to the model. Keep it under the context window |
+| `ollama.num_ctx` | 8192 is safe on 8 GB of VRAM. With `OLLAMA_FLASH_ATTENTION=1` and `OLLAMA_KV_CACHE_TYPE=q8_0` on the Ollama host, try 16384 or 32768 and raise `max_chars` to match |
+| `ollama.think` | Reasoning mode. Slow and unnecessary for structured summarization |
+| `ollama.wait_minutes` | How long to wait if the Ollama machine is asleep when the job fires |
+
+Budget roughly 40 to 90 seconds per paper on a consumer GPU, so 10 to 25 minutes for a
+15-paper digest.
+
+## Home Assistant integration (optional)
+
+Trigger the digest by voice or from a dashboard. In `configuration.yaml`:
 
 ```yaml
 rest_command:
-  lancer_veille:
-    url: "http://10.200.0.20:8137/run"
+  run_paper_digest:
+    url: "http://DIGEST_HOST:8137/run"
     method: POST
     headers:
-      X-Token: !secret veille_token
+      X-Token: !secret digest_token
 
 rest:
-  - resource: "http://10.200.0.20:8137/status"
+  - resource: "http://DIGEST_HOST:8137/status"
     scan_interval: 600
     headers:
-      X-Token: !secret veille_token
+      X-Token: !secret digest_token
     sensor:
-      - name: "Veille scientifique"
-        value_template: "{{ value_json.last_run.status if value_json.last_run else 'jamais' }}"
+      - name: "Paper digest"
+        value_template: "{{ value_json.last_run.status if value_json.last_run else 'never' }}"
         json_attributes_path: "$.last_run.details"
         json_attributes:
           - selected
           - summarized
           - mail_sent
-
-intent_script:
-  LancerVeille:
-    action:
-      - action: rest_command.lancer_veille
-    speech:
-      text: "Je lance la veille scientifique, le rapport arrivera par mail."
 ```
 
-`config/custom_sentences/fr/veille.yaml` :
+Add an `intent_script` and a file under `config/custom_sentences/` if you want a voice
+command. Custom sentences require a full Home Assistant restart, not just a config
+reload.
 
-```yaml
-language: "fr"
-intents:
-  LancerVeille:
-    data:
-      - sentences:
-          - "lance la veille scientifique"
-          - "lance la veille"
-          - "démarre la veille scientifique"
-```
+## Known limitations
 
-Redemarrage complet du conteneur HA necessaire apres ajout des phrases personnalisees.
+- OpenAlex only exposes a PDF for open-access papers. Otherwise the summary is based on
+  the abstract alone.
+- arXiv rate-limits its API, so a 3-second delay is applied between requests.
+- Summaries reflect extracted text only. Figures and image-based tables are ignored.
+- Conference proceedings usually appear on arXiv first. OpenAlex is the safety net for
+  journal publications.
+- The summary quality is bounded by the model you run. A 4B model will miss nuances a
+  9B model catches, especially on long papers.
 
-## Reglages utiles
+## License
 
-| Cle | Effet |
-| --- | --- |
-| `selection.max_papers` | Nombre d'articles lus integralement (cout GPU lineaire) |
-| `selection.min_score` | Seuil de pertinence, monter si trop de bruit |
-| `scoring.keywords` | Poids par mot cle, c'est le levier principal |
-| `extraction.max_chars` | Taille du texte envoye au LLM, a garder sous `num_ctx` |
-| `ollama.think` | Mode raisonnement, inutile ici et couteux en temps |
-| `ollama.num_ctx` | 8192 tient sur 8 Go de VRAM. Avec `OLLAMA_FLASH_ATTENTION=1` et `OLLAMA_KV_CACHE_TYPE=q8_0`, tester 16384 ou 32768 |
-
-Compter environ 40 a 90 secondes de GPU par article, soit 10 a 25 minutes pour
-15 articles.
-
-## Limites connues
-
-- OpenAlex ne fournit un PDF que pour les articles en acces ouvert ; sinon le resume
-  se base sur l'abstract.
-- arXiv limite le debit : un delai de 3 secondes est applique entre les requetes.
-- Le resume reflete le texte extrait, pas les figures ni les tableaux en image.
-- Les proceedings CVPR / ICCV / Interspeech apparaissent souvent d'abord sur arXiv ;
-  OpenAlex sert de filet pour les publications en journal.
+See `LICENSE`.
